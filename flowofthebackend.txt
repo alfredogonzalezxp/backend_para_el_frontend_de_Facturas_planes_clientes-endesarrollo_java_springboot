@@ -1,0 +1,24 @@
+. The Request (Entry)
+The user enters their email and password on the website. 
+The website sends a message to your API:
+POST /api/auth/login
+
+2. The Controller (
+AuthController.cs
+)
+This is the "Receptionist". It accepts the request.
+
+It looks at 
+AuthController.cs
+.
+It checks the [HttpPost("login")] method.
+It takes the email/password and passes it to the Service.
+
+3. The Service (AuthService.cs)
+This is the "Brain". It does the actual work.
+
+It receives the email/password.
+It asks the Database: "Does this user exist?"
+If yes, it checks if the password matches.
+If everything is correct, it creates a "Ticket" (JWT Token).
+It sends the Ticket back to the Controller.

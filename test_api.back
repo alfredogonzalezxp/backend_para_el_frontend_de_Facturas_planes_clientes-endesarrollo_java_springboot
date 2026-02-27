@@ -1,0 +1,445 @@
+###############################################################################
+#  test_api.ps1 - Functional tests for the C# / ASP.NET Core backend API
+#  Base URL : http://localhost:5140
+#  Run      : .\test_api.ps1          (make sure the API is running first)
+###############################################################################
+
+$BaseUrl = "http://localhost:5140"
+
+# Unique test data (timestamp avoids email collisions)
+$timestamp   = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+$testEmail   = "testuser_${timestamp}@example.com"
+$testPass    = "TestPassword123!"
+$adminEmail  = "admin@test.com"          # <-- change if your seed admin is different
+$adminPass   = "admin123"                # <-- change if your seed admin is different
+
+# Counters
+$passed = 0
+$failed = 0
+
+function Write-Result {
+    param(
+        [string]$TestName,
+        [bool]$Success,
+        [string]$Details = ""
+    )
+    if ($Success) {
+        Write-Host "[PASS] $TestName" -ForegroundColor Green
+        $script:passed++
+    } else {
+        Write-Host "[FAIL] $TestName" -ForegroundColor Red
+        if ($Details) { Write-Host "       $Details" -ForegroundColor Yellow }
+        $script:failed++
+    }
+}
+
+###############################################################################
+#  TEST 1 - Health Check (GET /api/health)
+###############################################################################
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host " TEST 1: Health Check" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+
+try {
+    $response = Invoke-RestMethod -Uri "$BaseUrl/api/health" -Method GET
+    Write-Result "GET /api/health returns 200" $true
+    Write-Host "  Response: $response" -ForegroundColor Gray
+} catch {
+    Write-Result "GET /api/health returns 200" $false $_.Exception.Message
+}
+
+###############################################################################
+#  TEST 2 - Register / Signup (POST /api/auth/signup)
+###############################################################################
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host " TEST 2: Register (Signup)" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+
+$signupBody = @{
+    nombre   = "Test User $timestamp"
+    email    = $testEmail
+    password = $testPass
+    rol      = "User"
+} | ConvertTo-Json
+
+try {
+    $response = Invoke-RestMethod -Uri "$BaseUrl/api/auth/signup" -Method POST -ContentType "application/json" -Body $signupBody
+
+    $hasMessage = $response.message -eq "User registered successfully"
+    $hasUserId  = $null -ne $response.userId
+    Write-Result "POST /api/auth/signup creates user" ($hasMessage -and $hasUserId)
+    Write-Host "  userId : $($response.userId)" -ForegroundColor Gray
+    Write-Host "  message: $($response.message)" -ForegroundColor Gray
+
+    # Save userId for later tests
+    $testUserId = $response.userId
+} catch {
+    Write-Result "POST /api/auth/signup creates user" $false $_.Exception.Message
+    $testUserId = $null
+}
+
+###############################################################################
+#  TEST 3 - Duplicate email returns error (POST /api/auth/signup)
+###############################################################################
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host " TEST 3: Duplicate Email Registration" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+
+try {
+    $dupResponse = Invoke-RestMethod -Uri "$BaseUrl/api/auth/signup" -Method POST -ContentType "application/json" -Body $signupBody
+    Write-Result "POST /api/auth/signup duplicate email returns error" $false "Expected error but got 200"
+} catch {
+    $statusCode = $_.Exception.Response.StatusCode.value__
+    Write-Result "POST /api/auth/signup duplicate email returns error" ($statusCode -ge 400)
+    Write-Host "  Status: $statusCode" -ForegroundColor Gray
+}
+
+###############################################################################
+#  TEST 4 - Login as the test user (POST /api/auth/login)
+###############################################################################
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host " TEST 4: Login as Test User" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+
+$loginBody = @{
+    email    = $testEmail
+    password = $testPass
+} | ConvertTo-Json
+
+try {
+    $response = Invoke-RestMethod -Uri "$BaseUrl/api/auth/login" -Method POST -ContentType "application/json" -Body $loginBody
+
+    $hasToken = ($null -ne $response.token) -and ($response.token.Length -gt 0)
+    Write-Result "POST /api/auth/login returns JWT" $hasToken
+    $userToken = $response.token
+    $tokenPreview = $userToken.Substring(0, [Math]::Min(40, $userToken.Length))
+    Write-Host "  Token (first 40 chars): ${tokenPreview}..." -ForegroundColor Gray
+} catch {
+    Write-Result "POST /api/auth/login returns JWT" $false $_.Exception.Message
+    $userToken = $null
+}
+
+###############################################################################
+#  TEST 5 - Login with wrong password (POST /api/auth/login)
+###############################################################################
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host " TEST 5: Login with Wrong Password" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+
+$badLoginBody = @{
+    email    = $testEmail
+    password = "WrongPassword999!"
+} | ConvertTo-Json
+
+try {
+    $response = Invoke-RestMethod -Uri "$BaseUrl/api/auth/login" -Method POST -ContentType "application/json" -Body $badLoginBody
+    Write-Result "POST /api/auth/login wrong password returns error" $false "Expected error but got 200"
+} catch {
+    $statusCode = $_.Exception.Response.StatusCode.value__
+    Write-Result "POST /api/auth/login wrong password returns error" ($statusCode -ge 400)
+    Write-Host "  Status: $statusCode" -ForegroundColor Gray
+}
+
+###############################################################################
+#  TEST 6 - Login as Admin (POST /api/auth/login)
+###############################################################################
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host " TEST 6: Login as Admin" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+
+$adminLoginBody = @{
+    email    = $adminEmail
+    password = $adminPass
+} | ConvertTo-Json
+
+try {
+    $response = Invoke-RestMethod -Uri "$BaseUrl/api/auth/login" -Method POST -ContentType "application/json" -Body $adminLoginBody
+
+    $hasToken = ($null -ne $response.token) -and ($response.token.Length -gt 0)
+    Write-Result "POST /api/auth/login (Admin) returns JWT" $hasToken
+    $adminToken = $response.token
+    $tokenPreview = $adminToken.Substring(0, [Math]::Min(40, $adminToken.Length))
+    Write-Host "  Token (first 40 chars): ${tokenPreview}..." -ForegroundColor Gray
+} catch {
+    Write-Result "POST /api/auth/login (Admin) returns JWT" $false $_.Exception.Message
+    $adminToken = $null
+}
+
+###############################################################################
+#  TEST 7 - Get all users WITHOUT token => 401 (GET /api/users)
+###############################################################################
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host " TEST 7: Get Users without Token (401)" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+
+try {
+    $response = Invoke-RestMethod -Uri "$BaseUrl/api/users" -Method GET
+    Write-Result "GET /api/users no token => 401" $false "Expected 401 but got 200"
+} catch {
+    $statusCode = $_.Exception.Response.StatusCode.value__
+    Write-Result "GET /api/users no token => 401" ($statusCode -eq 401)
+    Write-Host "  Status: $statusCode" -ForegroundColor Gray
+}
+
+###############################################################################
+#  TEST 8 - Get all users with non-Admin token => 403 (GET /api/users)
+###############################################################################
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host " TEST 8: Get Users with User Token (403)" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+
+if ($userToken) {
+    try {
+        $headers = @{ Authorization = "Bearer $userToken" }
+        $response = Invoke-RestMethod -Uri "$BaseUrl/api/users" -Method GET -Headers $headers
+        Write-Result "GET /api/users User token => 403" $false "Expected 403 but got 200"
+    } catch {
+        $statusCode = $_.Exception.Response.StatusCode.value__
+        Write-Result "GET /api/users User token => 403" ($statusCode -eq 403)
+        Write-Host "  Status: $statusCode" -ForegroundColor Gray
+    }
+} else {
+    Write-Result "GET /api/users User token => 403" $false "Skipped - no user token available"
+}
+
+###############################################################################
+#  TEST 9 - Get all users with Admin token => 200 (GET /api/users)
+###############################################################################
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host " TEST 9: Get All Users (Admin)" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+
+if ($adminToken) {
+    try {
+        $headers = @{ Authorization = "Bearer $adminToken" }
+        $response = Invoke-RestMethod -Uri "$BaseUrl/api/users" -Method GET -Headers $headers
+        $isArray = $response -is [System.Array]
+        Write-Result "GET /api/users Admin => 200 + array" $isArray
+        Write-Host "  Users returned: $($response.Count)" -ForegroundColor Gray
+        foreach ($u in $response) {
+            Write-Host "    id=$($u.id)  nombre=$($u.nombre)  email=$($u.email)  rol=$($u.rol)" -ForegroundColor Gray
+        }
+    } catch {
+        Write-Result "GET /api/users Admin => 200 + array" $false $_.Exception.Message
+    }
+} else {
+    Write-Result "GET /api/users Admin => 200 + array" $false "Skipped - no admin token available"
+}
+
+###############################################################################
+#  TEST 10 - Get user by ID (GET /api/users/{id})
+###############################################################################
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host " TEST 10: Get User by ID (Admin)" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+
+if ($adminToken -and $testUserId) {
+    try {
+        $headers = @{ Authorization = "Bearer $adminToken" }
+        $response = Invoke-RestMethod -Uri "$BaseUrl/api/users/$testUserId" -Method GET -Headers $headers
+        $correctUser = $response.email -eq $testEmail
+        Write-Result "GET /api/users/$testUserId => correct user" $correctUser
+        Write-Host "  id=$($response.id)  nombre=$($response.nombre)  email=$($response.email)" -ForegroundColor Gray
+    } catch {
+        Write-Result "GET /api/users/$testUserId => correct user" $false $_.Exception.Message
+    }
+} else {
+    Write-Result "GET /api/users/{id} => correct user" $false "Skipped - missing admin token or test user ID"
+}
+
+###############################################################################
+#  TEST 11 - Get user that does not exist => 404 (GET /api/users/99999)
+###############################################################################
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host " TEST 11: Get Non-Existent User (404)" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+
+if ($adminToken) {
+    try {
+        $headers = @{ Authorization = "Bearer $adminToken" }
+        $response = Invoke-RestMethod -Uri "$BaseUrl/api/users/99999" -Method GET -Headers $headers
+        Write-Result "GET /api/users/99999 => 404" $false "Expected 404 but got 200"
+    } catch {
+        $statusCode = $_.Exception.Response.StatusCode.value__
+        Write-Result "GET /api/users/99999 => 404" ($statusCode -eq 404)
+        Write-Host "  Status: $statusCode" -ForegroundColor Gray
+    }
+} else {
+    Write-Result "GET /api/users/99999 => 404" $false "Skipped - no admin token"
+}
+
+###############################################################################
+#  TEST 12 - Update user (PUT /api/users/{id})
+###############################################################################
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host " TEST 12: Update User (Admin)" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+
+if ($adminToken -and $testUserId) {
+    $updateBody = @{
+        nombre = "Updated Name $timestamp"
+        email  = "updated_${timestamp}@example.com"
+        rol    = "User"
+    } | ConvertTo-Json
+
+    try {
+        $headers = @{ Authorization = "Bearer $adminToken" }
+        $response = Invoke-RestMethod -Uri "$BaseUrl/api/users/$testUserId" -Method PUT -ContentType "application/json" -Headers $headers -Body $updateBody
+        $success = $response.message -eq "User updated successfully"
+        Write-Result "PUT /api/users/$testUserId => updated" $success
+        Write-Host "  message: $($response.message)" -ForegroundColor Gray
+    } catch {
+        Write-Result "PUT /api/users/$testUserId => updated" $false $_.Exception.Message
+    }
+} else {
+    Write-Result "PUT /api/users/{id} => updated" $false "Skipped - missing admin token or test user ID"
+}
+
+###############################################################################
+#  TEST 13 - Verify the update took effect (GET /api/users/{id})
+###############################################################################
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host " TEST 13: Verify Update (GET after PUT)" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+
+if ($adminToken -and $testUserId) {
+    try {
+        $headers = @{ Authorization = "Bearer $adminToken" }
+        $response = Invoke-RestMethod -Uri "$BaseUrl/api/users/$testUserId" -Method GET -Headers $headers
+        $nameUpdated  = $response.nombre -eq "Updated Name $timestamp"
+        $emailUpdated = $response.email  -eq "updated_${timestamp}@example.com"
+        Write-Result "GET /api/users/$testUserId reflects update" ($nameUpdated -and $emailUpdated)
+        Write-Host "  nombre: $($response.nombre)" -ForegroundColor Gray
+        Write-Host "  email : $($response.email)" -ForegroundColor Gray
+    } catch {
+        Write-Result "GET /api/users/$testUserId reflects update" $false $_.Exception.Message
+    }
+} else {
+    Write-Result "Verify update" $false "Skipped"
+}
+
+###############################################################################
+#  TEST 14 - Update non-existent user => 404 (PUT /api/users/99999)
+###############################################################################
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host " TEST 14: Update Non-Existent User (404)" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+
+if ($adminToken) {
+    $updateBody404 = @{
+        nombre = "Ghost"
+        email  = "ghost@example.com"
+        rol    = "User"
+    } | ConvertTo-Json
+
+    try {
+        $headers = @{ Authorization = "Bearer $adminToken" }
+        $response = Invoke-RestMethod -Uri "$BaseUrl/api/users/99999" -Method PUT -ContentType "application/json" -Headers $headers -Body $updateBody404
+        Write-Result "PUT /api/users/99999 => 404" $false "Expected 404 but got 200"
+    } catch {
+        $statusCode = $_.Exception.Response.StatusCode.value__
+        Write-Result "PUT /api/users/99999 => 404" ($statusCode -eq 404)
+        Write-Host "  Status: $statusCode" -ForegroundColor Gray
+    }
+} else {
+    Write-Result "PUT /api/users/99999 => 404" $false "Skipped"
+}
+
+###############################################################################
+#  TEST 15 - Delete user (DELETE /api/users/{id})
+###############################################################################
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host " TEST 15: Delete User (Admin)" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+
+if ($adminToken -and $testUserId) {
+    try {
+        $headers = @{ Authorization = "Bearer $adminToken" }
+        $response = Invoke-RestMethod -Uri "$BaseUrl/api/users/$testUserId" -Method DELETE -Headers $headers
+        $success = $response.message -eq "User deleted successfully"
+        Write-Result "DELETE /api/users/$testUserId => deleted" $success
+        Write-Host "  message: $($response.message)" -ForegroundColor Gray
+    } catch {
+        Write-Result "DELETE /api/users/$testUserId => deleted" $false $_.Exception.Message
+    }
+} else {
+    Write-Result "DELETE /api/users/{id} => deleted" $false "Skipped"
+}
+
+###############################################################################
+#  TEST 16 - Verify deletion (GET deleted user => 404)
+###############################################################################
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host " TEST 16: Verify Deletion (GET => 404)" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+
+if ($adminToken -and $testUserId) {
+    try {
+        $headers = @{ Authorization = "Bearer $adminToken" }
+        $response = Invoke-RestMethod -Uri "$BaseUrl/api/users/$testUserId" -Method GET -Headers $headers
+        Write-Result "GET /api/users/$testUserId after delete => 404" $false "Expected 404 but got 200"
+    } catch {
+        $statusCode = $_.Exception.Response.StatusCode.value__
+        Write-Result "GET /api/users/$testUserId after delete => 404" ($statusCode -eq 404)
+        Write-Host "  Status: $statusCode" -ForegroundColor Gray
+    }
+} else {
+    Write-Result "Verify deletion" $false "Skipped"
+}
+
+###############################################################################
+#  TEST 17 - Delete non-existent user => 404 (DELETE /api/users/99999)
+###############################################################################
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host " TEST 17: Delete Non-Existent User (404)" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+
+if ($adminToken) {
+    try {
+        $headers = @{ Authorization = "Bearer $adminToken" }
+        $response = Invoke-RestMethod -Uri "$BaseUrl/api/users/99999" -Method DELETE -Headers $headers
+        Write-Result "DELETE /api/users/99999 => 404" $false "Expected 404 but got 200"
+    } catch {
+        $statusCode = $_.Exception.Response.StatusCode.value__
+        Write-Result "DELETE /api/users/99999 => 404" ($statusCode -eq 404)
+        Write-Host "  Status: $statusCode" -ForegroundColor Gray
+    }
+} else {
+    Write-Result "DELETE /api/users/99999 => 404" $false "Skipped"
+}
+
+###############################################################################
+#  SUMMARY
+###############################################################################
+Write-Host ""
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host " RESULTS SUMMARY" -ForegroundColor Cyan
+Write-Host "========================================" -ForegroundColor Cyan
+Write-Host "  Total : $($passed + $failed)" -ForegroundColor White
+Write-Host "  Passed: $passed" -ForegroundColor Green
+Write-Host "  Failed: $failed" -ForegroundColor Red
+Write-Host ""
+
+if ($failed -eq 0) {
+    Write-Host "  ALL TESTS PASSED!" -ForegroundColor Green
+} else {
+    Write-Host "  Some tests failed. Review output above." -ForegroundColor Yellow
+}
+Write-Host ""
