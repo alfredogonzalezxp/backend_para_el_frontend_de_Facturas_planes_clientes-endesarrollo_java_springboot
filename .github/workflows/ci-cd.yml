@@ -13,10 +13,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
 
@@ -27,7 +27,7 @@ jobs:
         run: dotnet build ./api.csproj --configuration Release --no-restore
 
       - name: Test
-        run: dotnet test ./MyApi.Tests/MyApi.Tests.csproj --configuration Release --no-build
+        run: dotnet test ./MyApi.Tests/MyApi.Tests.csproj --configuration Release
 
   docker:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -36,10 +36,10 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Log in to Docker Hub
-        uses: docker/login-action@v4
+        uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
@@ -48,9 +48,10 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build and push image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v5
         with:
           context: .
+          file: ./Dockerfile
           push: true
           tags: alfredognonzalezxp77/myapi:latest
 
@@ -62,11 +63,11 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
             echo "${{ secrets.DOCKER_PASSWORD }}" | docker login -u "${{ secrets.DOCKER_USERNAME }}" --password-stdin
-            docker pull yourdockeruser/myapi:latest
+            docker pull alfredognonzalezxp77/myapi:latest
             docker stop myapi || true
             docker rm myapi || true
             docker run -d \
               --name myapi \
               --restart unless-stopped \
               -p 80:8080 \
-              yourdockeruser/myapi:latest
+              alfredognonzalezxp77/myapi:latest
